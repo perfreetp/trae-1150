@@ -224,12 +224,13 @@ export interface ReplaySnapshot {
   turn: number;
   subTurn: number;
   currentUnitId: string | null;
+  currentQueueIndex: number;
   isOver: boolean;
   winner: string | null;
   units: Unit[];
   grid: GridCell[][];
   log: BattleLogEntry[];
-  queueEntries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[];
+  queueData: { entries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[]; currentIndex: number; turnNumber: number; subTurnNumber: number };
 }
 
 export interface ReplayData {

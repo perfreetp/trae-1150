@@ -5,6 +5,7 @@ import {
   UnitBaseStats,
   UnitStatus,
   SkillDefinition,
+  SkillEffectType,
   Position,
   ActionResult,
   TargetResult,
@@ -111,6 +112,7 @@ export class BattleRoom {
       this.currentUnitId = entry.unitId;
       this.processStartOfTurn(entry.unitId);
     }
+    this.takeSnapshot();
     this.emit('battle_start', {});
   }
 
@@ -169,6 +171,7 @@ export class BattleRoom {
     this.unitManager.setUnitPosition(unitId, targetPos);
     this.logAction('move', unitId, [], { from: oldPos, to: targetPos });
     this.emit('unit_moved', { unitId, from: oldPos, to: targetPos });
+    this.takeSnapshot();
   }
 
   useSkill(actorId: string, skillId: string, targetIds: string[]): ActionResult {
@@ -185,6 +188,12 @@ export class BattleRoom {
 
     const validatedTargets = this.resolveAndValidateTargets(actor, skill, targetIds);
 
+    const preSnapshot = {
+      units: this.unitManager.serialize(),
+      grid: this.grid.serialize(),
+      cooldowns: { ...actor.cooldowns },
+    };
+
     const results: TargetResult[] = [];
     for (const tid of validatedTargets) {
       const target = this.unitManager.getUnitSafe(tid);
@@ -192,6 +201,17 @@ export class BattleRoom {
       for (const effect of skill.effects) {
         const result = this.effectResolver.resolveEffect(actor, target, effect);
         results.push(result);
+      }
+    }
+
+    const hasFailure = results.some(r => r.failureReason);
+    if (hasFailure) {
+      this.rollbackUnitState(preSnapshot);
+      const failure = results.find(r => r.failureReason)!;
+      if (failure.failureReason!.includes('召唤')) {
+        throw new SDKError(ErrorCode.NoCellForSummon, failure.failureReason!);
+      } else {
+        throw new SDKError(ErrorCode.NoCellForRevive, failure.failureReason!);
       }
     }
 
@@ -214,6 +234,8 @@ export class BattleRoom {
     this.cleanupDeadAndCheckEnd();
     if (!this.isOver) {
       this.advanceTurn();
+    } else {
+      this.takeSnapshot();
     }
     return action;
   }
@@ -247,6 +269,8 @@ export class BattleRoom {
     this.cleanupDeadAndCheckEnd();
     if (!this.isOver) {
       this.advanceTurn();
+    } else {
+      this.takeSnapshot();
     }
   }
 
@@ -296,7 +320,6 @@ export class BattleRoom {
       this.isOver = true;
       this.winner = aliveTeams.length === 1 ? aliveTeams[0] : null;
       this.emit('battle_end', { winner: this.winner });
-      this.takeSnapshot();
       return true;
     }
 
@@ -304,7 +327,6 @@ export class BattleRoom {
       this.isOver = true;
       this.winner = this.findWinnerTeam();
       this.emit('battle_end', { winner: this.winner });
-      this.takeSnapshot();
       return true;
     }
 
@@ -312,7 +334,6 @@ export class BattleRoom {
       this.isOver = true;
       this.winner = null;
       this.emit('battle_end', { winner: null });
-      this.takeSnapshot();
       return true;
     }
 
@@ -344,6 +365,7 @@ export class BattleRoom {
   }
 
   save(): ReplayData {
+    this.takeSnapshot();
     return this.replayManager.serialize();
   }
 
@@ -364,20 +386,20 @@ export class BattleRoom {
             if (lastSnapshot.grid[y][x].unitId) {
               try {
                 grid.placeUnit({ x, y }, lastSnapshot.grid[y][x].unitId!);
-              } catch (_) {
-                // cell may be occupied during restore, skip
-              }
+              } catch (_) { /* skip occupied during restore */ }
             }
           }
         }
       }
       (room as any).grid = grid;
 
-      if (lastSnapshot.queueEntries && lastSnapshot.queueEntries.length > 0) {
+      if (lastSnapshot.queueData) {
+        const qd = lastSnapshot.queueData;
         room.turnQueue.restore(
-          lastSnapshot.queueEntries,
-          lastSnapshot.turn,
-          lastSnapshot.subTurn
+          qd.entries,
+          qd.turnNumber,
+          qd.subTurnNumber,
+          qd.currentIndex
         );
       } else {
         const aliveUnits = room.unitManager.getAliveUnits();
@@ -412,6 +434,8 @@ export class BattleRoom {
   }
 
   private resolveAndValidateTargets(actor: Unit, skill: SkillDefinition, requestedIds: string[]): string[] {
+    const hasReviveEffect = skill.effects.some(e => e.type === SkillEffectType.Revive);
+
     switch (skill.targetPattern) {
       case SkillTargetType.Self: {
         for (const tid of requestedIds) {
@@ -444,16 +468,25 @@ export class BattleRoom {
         const valid: string[] = [];
         for (const tid of requestedIds) {
           const target = this.unitManager.getUnit(tid);
-          if (target.id !== actor.id && target.team !== actor.team) {
+          if (target.team !== actor.team) {
             throw new SDKError(ErrorCode.TargetTeamMismatch, `友方技能不能选择敌方单位 ${tid}`);
           }
           if (target.id === actor.id) {
             throw new SDKError(ErrorCode.TargetTeamMismatch, `友方技能不能选择自身，请使用自身技能类型`);
           }
-          if (target.status === UnitStatus.Dead) {
-            throw new SDKError(ErrorCode.UnitDead, tid);
+          if (hasReviveEffect) {
+            if (target.status === UnitStatus.Alive) {
+              throw new SDKError(ErrorCode.TargetTeamMismatch, `复活技能只能选择已阵亡的友方单位，${tid} 还活着`);
+            }
+            if (target.status === UnitStatus.Stunned || target.status === UnitStatus.Frozen) {
+              throw new SDKError(ErrorCode.TargetTeamMismatch, `复活技能只能选择已阵亡的友方单位`);
+            }
+          } else {
+            if (target.status === UnitStatus.Dead) {
+              throw new SDKError(ErrorCode.UnitDead, tid);
+            }
           }
-          if (target.pos && !this.skillManager.isInRange(actor.pos!, target.pos, skill, this.grid)) {
+          if (target.status !== UnitStatus.Dead && target.pos && !this.skillManager.isInRange(actor.pos!, target.pos, skill, this.grid)) {
             throw new SDKError(ErrorCode.OutOfRange, `${actor.id} -> ${tid}`);
           }
           valid.push(tid);
@@ -462,18 +495,57 @@ export class BattleRoom {
       }
 
       case SkillTargetType.AllEnemy: {
+        if (requestedIds.length === 0) {
+          return this.unitManager.getAliveUnits()
+            .filter(u => u.team !== actor.team && u.pos && this.skillManager.isInRange(actor.pos!, u.pos, skill, this.grid))
+            .map(u => u.id);
+        }
+        for (const tid of requestedIds) {
+          const target = this.unitManager.getUnitSafe(tid);
+          if (target && target.team === actor.team) {
+            throw new SDKError(ErrorCode.TargetTeamMismatch, `全体敌方技能不能包含友方单位 ${tid}`);
+          }
+          if (target && target.status === UnitStatus.Dead) {
+            throw new SDKError(ErrorCode.UnitDead, `全体敌方技能不能包含阵亡单位 ${tid}`);
+          }
+        }
         return this.unitManager.getAliveUnits()
           .filter(u => u.team !== actor.team && u.pos && this.skillManager.isInRange(actor.pos!, u.pos, skill, this.grid))
           .map(u => u.id);
       }
 
       case SkillTargetType.AllAlly: {
+        if (requestedIds.length === 0) {
+          return this.unitManager.getAliveUnits()
+            .filter(u => u.team === actor.team && u.pos && this.skillManager.isInRange(actor.pos!, u.pos, skill, this.grid))
+            .map(u => u.id);
+        }
+        for (const tid of requestedIds) {
+          const target = this.unitManager.getUnitSafe(tid);
+          if (target && target.team !== actor.team) {
+            throw new SDKError(ErrorCode.TargetTeamMismatch, `全体友方技能不能包含敌方单位 ${tid}`);
+          }
+          if (target && target.status === UnitStatus.Dead) {
+            throw new SDKError(ErrorCode.UnitDead, `全体友方技能不能包含阵亡单位 ${tid}`);
+          }
+        }
         return this.unitManager.getAliveUnits()
           .filter(u => u.team === actor.team && u.pos && this.skillManager.isInRange(actor.pos!, u.pos, skill, this.grid))
           .map(u => u.id);
       }
 
       case SkillTargetType.All: {
+        if (requestedIds.length === 0) {
+          return this.unitManager.getAliveUnits()
+            .filter(u => u.pos && this.skillManager.isInRange(actor.pos!, u.pos, skill, this.grid))
+            .map(u => u.id);
+        }
+        for (const tid of requestedIds) {
+          const target = this.unitManager.getUnitSafe(tid);
+          if (target && target.status === UnitStatus.Dead) {
+            throw new SDKError(ErrorCode.UnitDead, `全体技能不能包含阵亡单位 ${tid}`);
+          }
+        }
         return this.unitManager.getAliveUnits()
           .filter(u => u.pos && this.skillManager.isInRange(actor.pos!, u.pos, skill, this.grid))
           .map(u => u.id);
@@ -508,6 +580,24 @@ export class BattleRoom {
     }
   }
 
+  private rollbackUnitState(preSnapshot: { units: Unit[]; grid: import('../types').GridCell[][]; cooldowns: Record<string, number> }): void {
+    this.unitManager.restore(preSnapshot.units);
+    for (let y = 0; y < this.grid.getHeight(); y++) {
+      for (let x = 0; x < this.grid.getWidth(); x++) {
+        const snapCell = preSnapshot.grid[y]?.[x];
+        if (snapCell) {
+          const currentCell = this.grid.getCell({ x, y });
+          currentCell.terrain = snapCell.terrain;
+          currentCell.unitId = snapCell.unitId;
+        }
+      }
+    }
+    const actor = this.unitManager.getUnitSafe(this.currentUnitId!);
+    if (actor) {
+      actor.cooldowns = { ...preSnapshot.cooldowns };
+    }
+  }
+
   private assertBattleActive(): void {
     if (!this.started) throw new SDKError(ErrorCode.BattleNotStarted);
     if (this.isOver) throw new SDKError(ErrorCode.BattleOver);
@@ -526,6 +616,7 @@ export class BattleRoom {
     if (this.unitManager.getUnitSafe(unitId)?.status === UnitStatus.Dead) {
       this.logAction('dot_death', unitId, [], {});
       this.cleanupDeadAndCheckEnd();
+      this.takeSnapshot();
       return;
     }
 
@@ -539,6 +630,7 @@ export class BattleRoom {
       if (this.unitManager.getUnitSafe(unitId)?.status === UnitStatus.Dead) {
         this.logAction('terrain_death', unitId, [], {});
         this.cleanupDeadAndCheckEnd();
+        this.takeSnapshot();
         return;
       }
       if (terrainCfg.healPerTurn && terrainCfg.healPerTurn > 0) {
@@ -586,6 +678,7 @@ export class BattleRoom {
     } else {
       this.checkBattleEnd();
     }
+    this.takeSnapshot();
   }
 
   private onUnitSummoned(unit: Unit): void {

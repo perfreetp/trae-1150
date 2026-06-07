@@ -33,12 +33,13 @@ export class ReplayManager {
     currentUnitId: string | null,
     isOver: boolean,
     winner: string | null,
-    queueEntries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[]
+    queueData: { entries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[]; currentIndex: number; turnNumber: number; subTurnNumber: number }
   ): void {
     this.snapshots.push({
-      turn: this.log.length > 0 ? this.log[this.log.length - 1].turn : 0,
-      subTurn: this.log.length > 0 ? this.log[this.log.length - 1].subTurn : 0,
+      turn: queueData.turnNumber,
+      subTurn: queueData.subTurnNumber,
       currentUnitId,
+      currentQueueIndex: queueData.currentIndex,
       isOver,
       winner,
       units: units.map(u => ({
@@ -54,7 +55,12 @@ export class ReplayManager {
       })),
       grid: grid.map(row => row.map(cell => ({ ...cell, pos: { ...cell.pos } }))),
       log: this.log.map(l => ({ ...l })),
-      queueEntries: queueEntries.map(e => ({ ...e })),
+      queueData: {
+        entries: queueData.entries.map(e => ({ ...e })),
+        currentIndex: queueData.currentIndex,
+        turnNumber: queueData.turnNumber,
+        subTurnNumber: queueData.subTurnNumber,
+      },
     });
   }
 
@@ -91,7 +97,12 @@ export class ReplayManager {
         })),
         grid: s.grid.map(row => row.map(cell => ({ ...cell, pos: { ...cell.pos } }))),
         log: s.log.map(l => ({ ...l })),
-        queueEntries: s.queueEntries.map(e => ({ ...e })),
+        queueData: {
+          entries: s.queueData.entries.map(e => ({ ...e })),
+          currentIndex: s.queueData.currentIndex,
+          turnNumber: s.queueData.turnNumber,
+          subTurnNumber: s.queueData.subTurnNumber,
+        },
       })),
       actions: this.actions.map(a => ({ ...a, results: a.results.map(r => ({ ...r })) })),
     };

@@ -141,14 +141,19 @@ export class TurnQueue {
     }
   }
 
-  serialize(): { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[] {
-    return this.queue.map(e => ({ unitId: e.unitId, speed: e.speed, hasActed: e.hasActed, isWaiting: e.isWaiting }));
+  serialize(): { entries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[]; currentIndex: number; turnNumber: number; subTurnNumber: number } {
+    return {
+      entries: this.queue.map(e => ({ unitId: e.unitId, speed: e.speed, hasActed: e.hasActed, isWaiting: e.isWaiting })),
+      currentIndex: this.currentIndex,
+      turnNumber: this.turnNumber,
+      subTurnNumber: this.subTurnNumber,
+    };
   }
 
-  restore(entries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[], turnNumber: number, subTurnNumber: number): void {
+  restore(entries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[], turnNumber: number, subTurnNumber: number, currentIndex?: number): void {
     this.queue = entries.map(e => ({ unitId: e.unitId, speed: e.speed, hasActed: e.hasActed, isWaiting: e.isWaiting }));
     this.turnNumber = turnNumber;
     this.subTurnNumber = subTurnNumber;
-    this.currentIndex = this.queue.length > 0 ? 0 : -1;
+    this.currentIndex = currentIndex !== undefined ? currentIndex : (this.queue.length > 0 ? 0 : -1);
   }
 }
