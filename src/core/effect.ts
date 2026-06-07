@@ -76,7 +76,7 @@ export class EffectResolver {
     return damage;
   }
 
-  resolveEffect(actor: Unit, target: Unit, effect: SkillEffect): TargetResult {
+  resolveEffect(actor: Unit, target: Unit, effect: SkillEffect, options?: { skillRange?: number }): TargetResult {
     const result: TargetResult = {
       targetId: target.id,
       hit: true,
@@ -157,13 +157,13 @@ export class EffectResolver {
 
       case SkillEffectType.Summon: {
         if (effect.summonTemplate) {
-          const spawnPos = actor.pos ? this.findNearestEmptyCell(actor.pos) : null;
+          const spawnPos = actor.pos ? this.findNearestEmptyCell(actor.pos, options?.skillRange) : null;
           if (!spawnPos) {
             result.summoned = false;
             result.failureReason = '附近无可用格子，无法召唤';
             break;
           }
-          const summonId = `summon_${actor.id}_${Date.now()}_${this.rng.nextInt(0, 9999)}`;
+          const summonId = `summon_${actor.id}_${this.rng.nextInt(0, 99999)}`;
           const template = effect.summonTemplate;
           const summon = this.unitManager.createUnit(
             summonId,
@@ -187,7 +187,7 @@ export class EffectResolver {
 
       case SkillEffectType.Revive: {
         if (target.status === UnitStatus.Dead) {
-          const spawnPos = actor.pos ? this.findNearestEmptyCell(actor.pos) : null;
+          const spawnPos = actor.pos ? this.findNearestEmptyCell(actor.pos, options?.skillRange) : null;
           if (!spawnPos) {
             result.revived = false;
             result.failureReason = '附近无可用格子，无法复活';
@@ -279,11 +279,11 @@ export class EffectResolver {
     this.unitManager.tickCooldowns(unitId);
   }
 
-  findNearestEmptyCell(center: Position): Position | null {
+  findNearestEmptyCell(center: Position, maxRange?: number): Position | null {
     const visited = new Set<string>();
     const key = (p: Position) => `${p.x},${p.y}`;
     visited.add(key(center));
-    const queue: Position[] = [center];
+    const queue: Array<{ pos: Position; dist: number }> = [{ pos: center, dist: 0 }];
     const dirs = [
       { x: 0, y: -1 },
       { x: 1, y: 0 },
@@ -293,10 +293,12 @@ export class EffectResolver {
     while (queue.length > 0) {
       const current = queue.shift()!;
       for (const d of dirs) {
-        const nx = current.x + d.x;
-        const ny = current.y + d.y;
-        const np: Position = { x: nx, y: ny };
+        const nx = current.pos.x + d.x;
+        const ny = current.pos.y + d.y;
+        const nextDist = current.dist + 1;
         if (nx < 0 || nx >= this.grid.getWidth() || ny < 0 || ny >= this.grid.getHeight()) continue;
+        if (maxRange !== undefined && nextDist > maxRange) continue;
+        const np: Position = { x: nx, y: ny };
         const k = key(np);
         if (visited.has(k)) continue;
         visited.add(k);
@@ -307,7 +309,7 @@ export class EffectResolver {
             return np;
           }
         }
-        queue.push(np);
+        queue.push({ pos: np, dist: nextDist });
       }
     }
     return null;

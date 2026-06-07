@@ -7,6 +7,8 @@ import {
   DiffItem,
 } from '../types';
 
+import type { BattleRoom } from './battle-room';
+
 export class BattleDiff {
   static compareStates(
     stateA: BattleState,
@@ -167,5 +169,25 @@ export class BattleDiff {
       dataA.snapshots[dataA.snapshots.length - 1],
       dataB.snapshots[dataB.snapshots.length - 1]
     );
+  }
+
+  static compareRooms(roomA: BattleRoom, roomB: BattleRoom): BattleDiffResult {
+    const stateA = roomA.getState();
+    const unitsA = roomA.getUnitManager().getAllUnits();
+    const logA = roomA.getReplayManager().getLog();
+    const stateB = roomB.getState();
+    const unitsB = roomB.getUnitManager().getAllUnits();
+    const logB = roomB.getReplayManager().getLog();
+
+    const result = BattleDiff.compareStates(stateA, unitsA, logA, stateB, unitsB, logB);
+
+    const rngA = roomA.getRng().getState();
+    const rngB = roomB.getRng().getState();
+    if (rngA !== rngB) {
+      result.identical = false;
+      result.differences.push({ field: 'rngState', valueA: rngA, valueB: rngB });
+    }
+
+    return result;
   }
 }

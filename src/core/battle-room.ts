@@ -13,12 +13,8 @@ import {
   EventListener,
   WinCondition,
   LoseCondition,
-  Buff,
-  Debuff,
-  DoTEffect,
   ReplayData,
   SkillTargetType,
-  DebuffType,
 } from '../types';
 import { SeededRNG } from '../utils/rng';
 import { SDKError, ErrorCode } from '../utils/errors';
@@ -39,6 +35,11 @@ interface PreSkillSnapshot {
   actionsLength: number;
 }
 
+interface PendingEvent {
+  event: string;
+  data: unknown;
+}
+
 export class BattleRoom {
   private config: BattleConfig;
   private grid: GridMap;
@@ -57,6 +58,7 @@ export class BattleRoom {
   private winCondition: WinCondition | null;
   private loseCondition: LoseCondition | null;
   private eventListeners: Map<string, EventListener[]> = new Map();
+  private pendingEvents: PendingEvent[] = [];
 
   constructor(config: BattleConfig) {
     this.config = { ...config };
@@ -203,6 +205,7 @@ export class BattleRoom {
 
     const validatedTargets = this.resolveAndValidateTargets(actor, skill, targetIds);
 
+    this.pendingEvents = [];
     const pre = this.capturePreSkillSnapshot(actor);
 
     const results: TargetResult[] = [];
@@ -210,7 +213,7 @@ export class BattleRoom {
       const target = this.unitManager.getUnitSafe(tid);
       if (!target) continue;
       for (const effect of skill.effects) {
-        const result = this.effectResolver.resolveEffect(actor, target, effect);
+        const result = this.effectResolver.resolveEffect(actor, target, effect, { skillRange: skill.range });
         results.push(result);
       }
     }
@@ -218,6 +221,7 @@ export class BattleRoom {
     const hasFailure = results.some(r => r.failureReason);
     if (hasFailure) {
       this.rollbackToPreSkillSnapshot(pre);
+      this.pendingEvents = [];
       const failure = results.find(r => r.failureReason)!;
       if (failure.failureReason!.includes('召唤')) {
         throw new SDKError(ErrorCode.NoCellForSummon, failure.failureReason!);
@@ -238,6 +242,9 @@ export class BattleRoom {
 
     this.replayManager.addAction(action);
     this.logAction('skill', actorId, validatedTargets, { skillId, results });
+
+    this.flushPendingEvents();
+
     this.emit('skill_used', action);
 
     this.turnQueue.markActed(actorId);
@@ -458,6 +465,7 @@ export class BattleRoom {
 
   private resolveAndValidateTargets(actor: Unit, skill: SkillDefinition, requestedIds: string[]): string[] {
     const hasReviveEffect = skill.effects.some(e => e.type === SkillEffectType.Revive);
+    const hasSummonEffect = skill.effects.some(e => e.type === SkillEffectType.Summon);
 
     switch (skill.targetPattern) {
       case SkillTargetType.Self: {
@@ -510,13 +518,23 @@ export class BattleRoom {
             if (target.status === UnitStatus.Stunned || target.status === UnitStatus.Frozen) {
               throw new SDKError(ErrorCode.TargetTeamMismatch, `复活技能只能选择已阵亡的友方单位`);
             }
+            if (target.status === UnitStatus.Dead) {
+              const cellInfo = this.skillManager.checkCellAvailability(actor.pos!, skill.range, this.grid);
+              if (!cellInfo.cellInRange) {
+                if (!cellInfo.cellAnywhere) {
+                  throw new SDKError(ErrorCode.NoCellForRevive, '地图上没有可用格子，无法复活');
+                } else {
+                  throw new SDKError(ErrorCode.OutOfRange, `复活范围(${skill.range})内没有可用格子，无法复活 ${tid}`);
+                }
+              }
+            }
           } else {
             if (target.status === UnitStatus.Dead) {
               throw new SDKError(ErrorCode.UnitDead, tid);
             }
-          }
-          if (target.status !== UnitStatus.Dead && target.pos && !this.skillManager.isInRange(actor.pos!, target.pos, skill, this.grid)) {
-            throw new SDKError(ErrorCode.OutOfRange, `${actor.id} -> ${tid}`);
+            if (target.pos && !this.skillManager.isInRange(actor.pos!, target.pos, skill, this.grid)) {
+              throw new SDKError(ErrorCode.OutOfRange, `${actor.id} -> ${tid}`);
+            }
           }
           valid.push(tid);
         }
@@ -596,7 +614,7 @@ export class BattleRoom {
           if (!target) {
             throw new SDKError(ErrorCode.UnitNotFound, `目标 ${tid} 不存在`);
           }
-          if (target.status === UnitStatus.Dead && !skill.effects.some(e => e.type === 'revive')) {
+          if (target.status === UnitStatus.Dead && !hasReviveEffect) {
             throw new SDKError(ErrorCode.UnitDead, tid);
           }
           if (target.pos && !this.skillManager.isInRange(actor.pos!, target.pos, skill, this.grid)) {
@@ -661,6 +679,13 @@ export class BattleRoom {
     if (excessActions > 0) {
       (this.replayManager as any).actions = currentActions.slice(0, pre.actionsLength);
     }
+  }
+
+  private flushPendingEvents(): void {
+    for (const pe of this.pendingEvents) {
+      this.emit(pe.event, pe.data);
+    }
+    this.pendingEvents = [];
   }
 
   private assertBattleActive(): void {
@@ -749,15 +774,15 @@ export class BattleRoom {
   private onUnitSummoned(unit: Unit): void {
     if (!unit.pos) return;
     this.turnQueue.addUnit(unit.id, this.unitManager.getEffectiveStat(unit.id, 'spd'), 'speed');
-    this.emit('unit_summoned', { unitId: unit.id, team: unit.team, pos: unit.pos, summonerId: unit.summonerId });
     this.logAction('summon', unit.summonerId ?? '', [unit.id], { summonId: unit.id });
+    this.pendingEvents.push({ event: 'unit_summoned', data: { unitId: unit.id, team: unit.team, pos: unit.pos, summonerId: unit.summonerId } });
   }
 
   private onUnitRevived(unit: Unit): void {
     if (!unit.pos) return;
     this.turnQueue.addUnit(unit.id, this.unitManager.getEffectiveStat(unit.id, 'spd'), 'speed');
-    this.emit('unit_revived', { unitId: unit.id, team: unit.team, pos: unit.pos });
     this.logAction('revive', unit.id, [], { pos: unit.pos });
+    this.pendingEvents.push({ event: 'unit_revived', data: { unitId: unit.id, team: unit.team, pos: unit.pos } });
   }
 
   private findWinnerTeam(): string | null {

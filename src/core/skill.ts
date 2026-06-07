@@ -10,6 +10,11 @@ import {
 import { SDKError, ErrorCode } from '../utils/errors';
 import { GridMap } from './grid-map';
 
+interface CellAvailability {
+  cellInRange: boolean;
+  cellAnywhere: boolean;
+}
+
 export class SkillManager {
   validateSkill(unit: Unit, skillId: string): SkillDefinition {
     const skill = unit.skills.find(s => s.id === skillId);
@@ -43,6 +48,14 @@ export class SkillManager {
     const hasReviveEffect = skill.effects.some(e => e.type === SkillEffectType.Revive);
     const results: SkillTargetInfo[] = [];
 
+    let cachedCellAvailability: CellAvailability | null = null;
+    const getCellAvailability = (): CellAvailability => {
+      if (!cachedCellAvailability) {
+        cachedCellAvailability = this.checkCellAvailability(actorPos!, skill.range, grid);
+      }
+      return cachedCellAvailability;
+    };
+
     for (const unit of allUnits) {
       if (unit.id === actor.id && skill.targetPattern !== SkillTargetType.Self && skill.targetPattern !== SkillTargetType.All && skill.targetPattern !== SkillTargetType.AllAlly) continue;
 
@@ -61,13 +74,12 @@ export class SkillManager {
 
           if (hasReviveEffect) {
             if (unit.status !== UnitStatus.Dead) continue;
-            const inRange = skill.range >= 0;
-            const hasCell = this.hasEmptyCellNearby(actorPos, grid);
+            const cellInfo = getCellAvailability();
             results.push({
               unitId: unit.id,
-              selectable: inRange && hasCell,
-              outOfRange: !inRange,
-              noCellAvailable: !hasCell,
+              selectable: cellInfo.cellInRange,
+              outOfRange: !cellInfo.cellInRange && cellInfo.cellAnywhere,
+              noCellAvailable: !cellInfo.cellAnywhere,
             });
           } else {
             if (unit.status === UnitStatus.Dead) continue;
@@ -159,23 +171,9 @@ export class SkillManager {
     }
   }
 
-  private hasEmptyCellNearby(center: Position, grid: GridMap): boolean {
-    const dirs = [
-      { x: 0, y: -1 },
-      { x: 1, y: 0 },
-      { x: 0, y: 1 },
-      { x: -1, y: 0 },
-    ];
-    for (const d of dirs) {
-      const nx = center.x + d.x;
-      const ny = center.y + d.y;
-      if (nx < 0 || nx >= grid.getWidth() || ny < 0 || ny >= grid.getHeight()) continue;
-      const cell = grid.getCell({ x: nx, y: ny });
-      if (cell.unitId === null) {
-        const cfg = grid.getTerrainEffects({ x: nx, y: ny });
-        if (cfg.passable) return true;
-      }
-    }
+  checkCellAvailability(center: Position, range: number, grid: GridMap): CellAvailability {
+    let cellInRange = false;
+    let cellAnywhere = false;
     const width = grid.getWidth();
     const height = grid.getHeight();
     for (let y = 0; y < height; y++) {
@@ -183,10 +181,16 @@ export class SkillManager {
         const cell = grid.getCell({ x, y });
         if (cell.unitId === null) {
           const cfg = grid.getTerrainEffects({ x, y });
-          if (cfg.passable) return true;
+          if (cfg.passable) {
+            cellAnywhere = true;
+            if (grid.distance(center, { x, y }) <= range) {
+              cellInRange = true;
+              return { cellInRange: true, cellAnywhere: true };
+            }
+          }
         }
       }
     }
-    return false;
+    return { cellInRange, cellAnywhere };
   }
 }
