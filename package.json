@@ -1,0 +1,15 @@
+{
+  "name": "turn-based-sdk",
+  "version": "1.0.0",
+  "description": "回合制游戏规则 SDK：行动顺序、技能、战斗结算",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}
