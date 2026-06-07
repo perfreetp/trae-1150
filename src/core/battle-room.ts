@@ -6,6 +6,7 @@ import {
   UnitStatus,
   SkillDefinition,
   SkillEffectType,
+  SkillTargetInfo,
   Position,
   ActionResult,
   TargetResult,
@@ -27,6 +28,16 @@ import { TurnQueue } from './turn-queue';
 import { SkillManager } from './skill';
 import { EffectResolver } from './effect';
 import { ReplayManager } from './replay';
+
+interface PreSkillSnapshot {
+  units: Unit[];
+  grid: import('../types').GridCell[][];
+  cooldowns: Record<string, number>;
+  rngState: number;
+  queueData: { entries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[]; currentIndex: number; turnNumber: number; subTurnNumber: number };
+  logLength: number;
+  actionsLength: number;
+}
 
 export class BattleRoom {
   private config: BattleConfig;
@@ -151,6 +162,10 @@ export class BattleRoom {
     return this.effectResolver;
   }
 
+  getRng(): SeededRNG {
+    return this.rng;
+  }
+
   moveUnit(unitId: string, targetPos: Position): void {
     this.assertBattleActive();
     this.assertCurrentUnit(unitId);
@@ -188,11 +203,7 @@ export class BattleRoom {
 
     const validatedTargets = this.resolveAndValidateTargets(actor, skill, targetIds);
 
-    const preSnapshot = {
-      units: this.unitManager.serialize(),
-      grid: this.grid.serialize(),
-      cooldowns: { ...actor.cooldowns },
-    };
+    const pre = this.capturePreSkillSnapshot(actor);
 
     const results: TargetResult[] = [];
     for (const tid of validatedTargets) {
@@ -206,7 +217,7 @@ export class BattleRoom {
 
     const hasFailure = results.some(r => r.failureReason);
     if (hasFailure) {
-      this.rollbackUnitState(preSnapshot);
+      this.rollbackToPreSkillSnapshot(pre);
       const failure = results.find(r => r.failureReason)!;
       if (failure.failureReason!.includes('召唤')) {
         throw new SDKError(ErrorCode.NoCellForSummon, failure.failureReason!);
@@ -284,7 +295,15 @@ export class BattleRoom {
   getSkillTargets(unitId: string, skillId: string): string[] {
     const unit = this.unitManager.getUnit(unitId);
     const skill = this.skillManager.validateSkill(unit, skillId);
-    return this.skillManager.getValidTargets(unit, skill, this.grid, this.unitManager.getAliveUnits());
+    const allUnits = this.unitManager.getAllUnits();
+    return this.skillManager.getValidTargets(unit, skill, this.grid, allUnits);
+  }
+
+  getSkillTargetInfos(unitId: string, skillId: string): SkillTargetInfo[] {
+    const unit = this.unitManager.getUnit(unitId);
+    const skill = this.skillManager.validateSkill(unit, skillId);
+    const allUnits = this.unitManager.getAllUnits();
+    return this.skillManager.getSkillTargetInfos(unit, skill, this.grid, allUnits);
   }
 
   setWinCondition(condition: WinCondition): void {
@@ -407,6 +426,10 @@ export class BattleRoom {
         room.turnQueue.rebuildWithSpeeds((uid) => room.unitManager.getEffectiveStat(uid, 'spd'));
       }
 
+      if (lastSnapshot.rngState !== undefined) {
+        room.rng.restoreState(lastSnapshot.rngState);
+      }
+
       (room as any).started = true;
       (room as any).isOver = lastSnapshot.isOver ?? false;
       (room as any).winner = lastSnapshot.winner ?? null;
@@ -449,7 +472,10 @@ export class BattleRoom {
       case SkillTargetType.Enemy: {
         const valid: string[] = [];
         for (const tid of requestedIds) {
-          const target = this.unitManager.getUnit(tid);
+          const target = this.unitManager.getUnitSafe(tid);
+          if (!target) {
+            throw new SDKError(ErrorCode.UnitNotFound, `目标 ${tid} 不存在`);
+          }
           if (target.team === actor.team) {
             throw new SDKError(ErrorCode.TargetTeamMismatch, `敌方技能不能选择友方单位 ${tid}`);
           }
@@ -467,7 +493,10 @@ export class BattleRoom {
       case SkillTargetType.Ally: {
         const valid: string[] = [];
         for (const tid of requestedIds) {
-          const target = this.unitManager.getUnit(tid);
+          const target = this.unitManager.getUnitSafe(tid);
+          if (!target) {
+            throw new SDKError(ErrorCode.UnitNotFound, `目标 ${tid} 不存在`);
+          }
           if (target.team !== actor.team) {
             throw new SDKError(ErrorCode.TargetTeamMismatch, `友方技能不能选择敌方单位 ${tid}`);
           }
@@ -502,10 +531,13 @@ export class BattleRoom {
         }
         for (const tid of requestedIds) {
           const target = this.unitManager.getUnitSafe(tid);
-          if (target && target.team === actor.team) {
+          if (!target) {
+            throw new SDKError(ErrorCode.UnitNotFound, `目标 ${tid} 不存在`);
+          }
+          if (target.team === actor.team) {
             throw new SDKError(ErrorCode.TargetTeamMismatch, `全体敌方技能不能包含友方单位 ${tid}`);
           }
-          if (target && target.status === UnitStatus.Dead) {
+          if (target.status === UnitStatus.Dead) {
             throw new SDKError(ErrorCode.UnitDead, `全体敌方技能不能包含阵亡单位 ${tid}`);
           }
         }
@@ -522,10 +554,13 @@ export class BattleRoom {
         }
         for (const tid of requestedIds) {
           const target = this.unitManager.getUnitSafe(tid);
-          if (target && target.team !== actor.team) {
+          if (!target) {
+            throw new SDKError(ErrorCode.UnitNotFound, `目标 ${tid} 不存在`);
+          }
+          if (target.team !== actor.team) {
             throw new SDKError(ErrorCode.TargetTeamMismatch, `全体友方技能不能包含敌方单位 ${tid}`);
           }
-          if (target && target.status === UnitStatus.Dead) {
+          if (target.status === UnitStatus.Dead) {
             throw new SDKError(ErrorCode.UnitDead, `全体友方技能不能包含阵亡单位 ${tid}`);
           }
         }
@@ -542,7 +577,10 @@ export class BattleRoom {
         }
         for (const tid of requestedIds) {
           const target = this.unitManager.getUnitSafe(tid);
-          if (target && target.status === UnitStatus.Dead) {
+          if (!target) {
+            throw new SDKError(ErrorCode.UnitNotFound, `目标 ${tid} 不存在`);
+          }
+          if (target.status === UnitStatus.Dead) {
             throw new SDKError(ErrorCode.UnitDead, `全体技能不能包含阵亡单位 ${tid}`);
           }
         }
@@ -554,7 +592,10 @@ export class BattleRoom {
       case SkillTargetType.Cell: {
         const valid: string[] = [];
         for (const tid of requestedIds) {
-          const target = this.unitManager.getUnit(tid);
+          const target = this.unitManager.getUnitSafe(tid);
+          if (!target) {
+            throw new SDKError(ErrorCode.UnitNotFound, `目标 ${tid} 不存在`);
+          }
           if (target.status === UnitStatus.Dead && !skill.effects.some(e => e.type === 'revive')) {
             throw new SDKError(ErrorCode.UnitDead, tid);
           }
@@ -580,11 +621,23 @@ export class BattleRoom {
     }
   }
 
-  private rollbackUnitState(preSnapshot: { units: Unit[]; grid: import('../types').GridCell[][]; cooldowns: Record<string, number> }): void {
-    this.unitManager.restore(preSnapshot.units);
+  private capturePreSkillSnapshot(actor: Unit): PreSkillSnapshot {
+    return {
+      units: this.unitManager.serialize(),
+      grid: this.grid.serialize(),
+      cooldowns: { ...actor.cooldowns },
+      rngState: this.rng.getState(),
+      queueData: this.turnQueue.serialize(),
+      logLength: this.replayManager.getLog().length,
+      actionsLength: this.replayManager.getActions().length,
+    };
+  }
+
+  private rollbackToPreSkillSnapshot(pre: PreSkillSnapshot): void {
+    this.unitManager.restore(pre.units);
     for (let y = 0; y < this.grid.getHeight(); y++) {
       for (let x = 0; x < this.grid.getWidth(); x++) {
-        const snapCell = preSnapshot.grid[y]?.[x];
+        const snapCell = pre.grid[y]?.[x];
         if (snapCell) {
           const currentCell = this.grid.getCell({ x, y });
           currentCell.terrain = snapCell.terrain;
@@ -594,7 +647,19 @@ export class BattleRoom {
     }
     const actor = this.unitManager.getUnitSafe(this.currentUnitId!);
     if (actor) {
-      actor.cooldowns = { ...preSnapshot.cooldowns };
+      actor.cooldowns = { ...pre.cooldowns };
+    }
+    this.rng.restoreState(pre.rngState);
+    this.turnQueue.restore(pre.queueData.entries, pre.queueData.turnNumber, pre.queueData.subTurnNumber, pre.queueData.currentIndex);
+    const currentLog = this.replayManager.getLog();
+    const excessLog = currentLog.length - pre.logLength;
+    if (excessLog > 0) {
+      (this.replayManager as any).log = currentLog.slice(0, pre.logLength);
+    }
+    const currentActions = this.replayManager.getActions();
+    const excessActions = currentActions.length - pre.actionsLength;
+    if (excessActions > 0) {
+      (this.replayManager as any).actions = currentActions.slice(0, pre.actionsLength);
     }
   }
 
@@ -720,7 +785,8 @@ export class BattleRoom {
       this.currentUnitId,
       this.isOver,
       this.winner,
-      this.turnQueue.serialize()
+      this.turnQueue.serialize(),
+      this.rng.getState()
     );
   }
 }

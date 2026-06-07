@@ -186,6 +186,13 @@ export interface TargetResult {
   failureReason?: string;
 }
 
+export interface SkillTargetInfo {
+  unitId: string;
+  selectable: boolean;
+  noCellAvailable?: boolean;
+  outOfRange?: boolean;
+}
+
 export interface BattleLogEntry {
   turn: number;
   subTurn: number;
@@ -225,6 +232,7 @@ export interface ReplaySnapshot {
   subTurn: number;
   currentUnitId: string | null;
   currentQueueIndex: number;
+  rngState: number;
   isOver: boolean;
   winner: string | null;
   units: Unit[];
@@ -259,4 +267,15 @@ export enum ErrorCode {
   ReplayCorrupted = 'E_REPLAY_CORRUPTED',
   NoCellForRevive = 'E_NO_CELL_REVIVE',
   NoCellForSummon = 'E_NO_CELL_SUMMON',
+}
+
+export interface DiffItem {
+  field: string;
+  valueA: unknown;
+  valueB: unknown;
+}
+
+export interface BattleDiffResult {
+  identical: boolean;
+  differences: DiffItem[];
 }

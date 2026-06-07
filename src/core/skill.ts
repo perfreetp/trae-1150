@@ -1,6 +1,8 @@
 import {
   SkillDefinition,
   SkillTargetType,
+  SkillEffectType,
+  SkillTargetInfo,
   Unit,
   UnitStatus,
   Position,
@@ -24,45 +26,102 @@ export class SkillManager {
     grid: GridMap,
     allUnits: Unit[]
   ): string[] {
+    return this.getSkillTargetInfos(actor, skill, grid, allUnits)
+      .filter(info => info.selectable)
+      .map(info => info.unitId);
+  }
+
+  getSkillTargetInfos(
+    actor: Unit,
+    skill: SkillDefinition,
+    grid: GridMap,
+    allUnits: Unit[]
+  ): SkillTargetInfo[] {
     const actorPos = actor.pos;
     if (!actorPos) return [];
 
-    const targetIds: string[] = [];
+    const hasReviveEffect = skill.effects.some(e => e.type === SkillEffectType.Revive);
+    const results: SkillTargetInfo[] = [];
 
     for (const unit of allUnits) {
-      if (unit.status === UnitStatus.Dead) continue;
-      if (!unit.pos) continue;
       if (unit.id === actor.id && skill.targetPattern !== SkillTargetType.Self && skill.targetPattern !== SkillTargetType.All && skill.targetPattern !== SkillTargetType.AllAlly) continue;
 
-      const dist = grid.distance(actorPos, unit.pos);
-      if (dist > skill.range) continue;
-
       switch (skill.targetPattern) {
-        case SkillTargetType.Enemy:
-          if (unit.team !== actor.team) targetIds.push(unit.id);
+        case SkillTargetType.Enemy: {
+          if (unit.team === actor.team) continue;
+          if (unit.status === UnitStatus.Dead) continue;
+          if (!unit.pos) continue;
+          const inRange = grid.distance(actorPos, unit.pos) <= skill.range;
+          results.push({ unitId: unit.id, selectable: inRange, outOfRange: !inRange });
           break;
-        case SkillTargetType.Ally:
-          if (unit.team === actor.team && unit.id !== actor.id) targetIds.push(unit.id);
+        }
+        case SkillTargetType.Ally: {
+          if (unit.team !== actor.team) continue;
+          if (unit.id === actor.id) continue;
+
+          if (hasReviveEffect) {
+            if (unit.status !== UnitStatus.Dead) continue;
+            const inRange = skill.range >= 0;
+            const hasCell = this.hasEmptyCellNearby(actorPos, grid);
+            results.push({
+              unitId: unit.id,
+              selectable: inRange && hasCell,
+              outOfRange: !inRange,
+              noCellAvailable: !hasCell,
+            });
+          } else {
+            if (unit.status === UnitStatus.Dead) continue;
+            if (!unit.pos) continue;
+            const inRange = grid.distance(actorPos, unit.pos) <= skill.range;
+            results.push({ unitId: unit.id, selectable: inRange, outOfRange: !inRange });
+          }
           break;
-        case SkillTargetType.Self:
-          if (unit.id === actor.id) targetIds.push(unit.id);
+        }
+        case SkillTargetType.Self: {
+          if (unit.id === actor.id) {
+            results.push({ unitId: unit.id, selectable: true });
+          }
           break;
-        case SkillTargetType.AllEnemy:
-          if (unit.team !== actor.team) targetIds.push(unit.id);
+        }
+        case SkillTargetType.AllEnemy: {
+          if (unit.team === actor.team) continue;
+          if (unit.status === UnitStatus.Dead) continue;
+          if (!unit.pos) continue;
+          if (grid.distance(actorPos, unit.pos) <= skill.range) {
+            results.push({ unitId: unit.id, selectable: true });
+          }
           break;
-        case SkillTargetType.AllAlly:
-          if (unit.team === actor.team) targetIds.push(unit.id);
+        }
+        case SkillTargetType.AllAlly: {
+          if (unit.team !== actor.team) continue;
+          if (unit.status === UnitStatus.Dead) continue;
+          if (!unit.pos) continue;
+          if (grid.distance(actorPos, unit.pos) <= skill.range) {
+            results.push({ unitId: unit.id, selectable: true });
+          }
           break;
-        case SkillTargetType.All:
-          targetIds.push(unit.id);
+        }
+        case SkillTargetType.All: {
+          if (unit.status === UnitStatus.Dead) continue;
+          if (!unit.pos) continue;
+          if (grid.distance(actorPos, unit.pos) <= skill.range) {
+            results.push({ unitId: unit.id, selectable: true });
+          }
           break;
-        case SkillTargetType.Cell:
-          targetIds.push(unit.id);
+        }
+        case SkillTargetType.Cell: {
+          if (unit.status === UnitStatus.Dead && !hasReviveEffect) continue;
+          if (!unit.pos && unit.status !== UnitStatus.Dead) continue;
+          const effectivePos = unit.pos ?? actorPos;
+          if (grid.distance(actorPos, effectivePos) <= skill.range) {
+            results.push({ unitId: unit.id, selectable: true });
+          }
           break;
+        }
       }
     }
 
-    return targetIds;
+    return results;
   }
 
   resolveAoETargets(
@@ -98,5 +157,36 @@ export class SkillManager {
         delete unit.cooldowns[skillId];
       }
     }
+  }
+
+  private hasEmptyCellNearby(center: Position, grid: GridMap): boolean {
+    const dirs = [
+      { x: 0, y: -1 },
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 },
+    ];
+    for (const d of dirs) {
+      const nx = center.x + d.x;
+      const ny = center.y + d.y;
+      if (nx < 0 || nx >= grid.getWidth() || ny < 0 || ny >= grid.getHeight()) continue;
+      const cell = grid.getCell({ x: nx, y: ny });
+      if (cell.unitId === null) {
+        const cfg = grid.getTerrainEffects({ x: nx, y: ny });
+        if (cfg.passable) return true;
+      }
+    }
+    const width = grid.getWidth();
+    const height = grid.getHeight();
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const cell = grid.getCell({ x, y });
+        if (cell.unitId === null) {
+          const cfg = grid.getTerrainEffects({ x, y });
+          if (cfg.passable) return true;
+        }
+      }
+    }
+    return false;
   }
 }

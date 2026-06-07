@@ -21,7 +21,11 @@ export class SeededRNG {
     return this.next() < probability;
   }
 
-  getSeed(): number {
+  getState(): number {
     return this.state;
+  }
+
+  restoreState(state: number): void {
+    this.state = state;
   }
 }

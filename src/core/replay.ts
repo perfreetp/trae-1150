@@ -33,13 +33,15 @@ export class ReplayManager {
     currentUnitId: string | null,
     isOver: boolean,
     winner: string | null,
-    queueData: { entries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[]; currentIndex: number; turnNumber: number; subTurnNumber: number }
+    queueData: { entries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[]; currentIndex: number; turnNumber: number; subTurnNumber: number },
+    rngState: number
   ): void {
     this.snapshots.push({
       turn: queueData.turnNumber,
       subTurn: queueData.subTurnNumber,
       currentUnitId,
       currentQueueIndex: queueData.currentIndex,
+      rngState,
       isOver,
       winner,
       units: units.map(u => ({
