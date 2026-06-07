@@ -140,4 +140,15 @@ export class TurnQueue {
       }
     }
   }
+
+  serialize(): { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[] {
+    return this.queue.map(e => ({ unitId: e.unitId, speed: e.speed, hasActed: e.hasActed, isWaiting: e.isWaiting }));
+  }
+
+  restore(entries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[], turnNumber: number, subTurnNumber: number): void {
+    this.queue = entries.map(e => ({ unitId: e.unitId, speed: e.speed, hasActed: e.hasActed, isWaiting: e.isWaiting }));
+    this.turnNumber = turnNumber;
+    this.subTurnNumber = subTurnNumber;
+    this.currentIndex = this.queue.length > 0 ? 0 : -1;
+  }
 }

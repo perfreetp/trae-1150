@@ -183,6 +183,7 @@ export interface TargetResult {
   dispelled: boolean;
   summoned: boolean;
   summonId?: string;
+  failureReason?: string;
 }
 
 export interface BattleLogEntry {
@@ -222,9 +223,13 @@ export interface BattleState {
 export interface ReplaySnapshot {
   turn: number;
   subTurn: number;
+  currentUnitId: string | null;
+  isOver: boolean;
+  winner: string | null;
   units: Unit[];
   grid: GridCell[][];
   log: BattleLogEntry[];
+  queueEntries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[];
 }
 
 export interface ReplayData {
@@ -240,6 +245,7 @@ export enum ErrorCode {
   SkillNotFound = 'E_SKILL_NOT_FOUND',
   SkillOnCooldown = 'E_SKILL_COOLDOWN',
   InvalidTarget = 'E_INVALID_TARGET',
+  TargetTeamMismatch = 'E_TARGET_TEAM_MISMATCH',
   OutOfRange = 'E_OUT_OF_RANGE',
   CellOccupied = 'E_CELL_OCCUPIED',
   CellImpassable = 'E_CELL_IMPASSABLE',
@@ -250,4 +256,6 @@ export enum ErrorCode {
   BattleOver = 'E_BATTLE_OVER',
   NoWinCondition = 'E_NO_WIN_CONDITION',
   ReplayCorrupted = 'E_REPLAY_CORRUPTED',
+  NoCellForRevive = 'E_NO_CELL_REVIVE',
+  NoCellForSummon = 'E_NO_CELL_SUMMON',
 }

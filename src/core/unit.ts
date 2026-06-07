@@ -196,6 +196,7 @@ export class UnitManager {
     let totalDamage = 0;
     const remaining: DoTEffect[] = [];
     for (const dot of unit.dots) {
+      if (this.getUnit(id).status === UnitStatus.Dead) break;
       const dmg = dot.damagePerTick;
       const result = this.takeDamage(id, dmg);
       totalDamage += result.hpLost;

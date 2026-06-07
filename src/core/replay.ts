@@ -27,10 +27,20 @@ export class ReplayManager {
     this.actions.push({ ...action, results: action.results.map(r => ({ ...r })) });
   }
 
-  takeSnapshot(units: Unit[], grid: GridCell[][]): void {
+  takeSnapshot(
+    units: Unit[],
+    grid: GridCell[][],
+    currentUnitId: string | null,
+    isOver: boolean,
+    winner: string | null,
+    queueEntries: { unitId: string; speed: number; hasActed: boolean; isWaiting: boolean }[]
+  ): void {
     this.snapshots.push({
       turn: this.log.length > 0 ? this.log[this.log.length - 1].turn : 0,
       subTurn: this.log.length > 0 ? this.log[this.log.length - 1].subTurn : 0,
+      currentUnitId,
+      isOver,
+      winner,
       units: units.map(u => ({
         ...u,
         pos: u.pos ? { ...u.pos } : null,
@@ -44,6 +54,7 @@ export class ReplayManager {
       })),
       grid: grid.map(row => row.map(cell => ({ ...cell, pos: { ...cell.pos } }))),
       log: this.log.map(l => ({ ...l })),
+      queueEntries: queueEntries.map(e => ({ ...e })),
     });
   }
 
@@ -80,6 +91,7 @@ export class ReplayManager {
         })),
         grid: s.grid.map(row => row.map(cell => ({ ...cell, pos: { ...cell.pos } }))),
         log: s.log.map(l => ({ ...l })),
+        queueEntries: s.queueEntries.map(e => ({ ...e })),
       })),
       actions: this.actions.map(a => ({ ...a, results: a.results.map(r => ({ ...r })) })),
     };

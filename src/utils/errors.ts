@@ -9,6 +9,7 @@ const ERROR_MESSAGES: Record<ErrorCode, string> = {
   [ErrorCode.SkillNotFound]: '未找到指定技能',
   [ErrorCode.SkillOnCooldown]: '技能冷却中',
   [ErrorCode.InvalidTarget]: '无效的目标',
+  [ErrorCode.TargetTeamMismatch]: '目标与技能目标类型不匹配',
   [ErrorCode.OutOfRange]: '超出技能范围',
   [ErrorCode.CellOccupied]: '格子已被占据',
   [ErrorCode.CellImpassable]: '地形不可通行',
@@ -19,6 +20,8 @@ const ERROR_MESSAGES: Record<ErrorCode, string> = {
   [ErrorCode.BattleOver]: '战斗已结束',
   [ErrorCode.NoWinCondition]: '未设置胜利条件',
   [ErrorCode.ReplayCorrupted]: '回放数据已损坏',
+  [ErrorCode.NoCellForRevive]: '附近无可用格子，无法复活',
+  [ErrorCode.NoCellForSummon]: '附近无可用格子，无法召唤',
 };
 
 export class SDKError extends Error {

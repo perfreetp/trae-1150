@@ -5,7 +5,6 @@ import {
   Unit,
   UnitStatus,
   Position,
-  TerrainType,
   DebuffType,
 } from '../types';
 import { SeededRNG } from '../utils/rng';
@@ -17,18 +16,21 @@ export class EffectResolver {
   private unitManager: UnitManager;
   private grid: GridMap;
   private onSummon?: (unit: Unit) => void;
+  private onRevive?: (unit: Unit) => void;
   private customHandlers: Map<string, (effect: SkillEffect, actor: Unit, target: Unit) => TargetResult | null>;
 
   constructor(
     rng: SeededRNG,
     unitManager: UnitManager,
     grid: GridMap,
-    onSummon?: (unit: Unit) => void
+    onSummon?: (unit: Unit) => void,
+    onRevive?: (unit: Unit) => void
   ) {
     this.rng = rng;
     this.unitManager = unitManager;
     this.grid = grid;
     this.onSummon = onSummon;
+    this.onRevive = onRevive;
     this.customHandlers = new Map();
   }
 
@@ -154,12 +156,18 @@ export class EffectResolver {
       }
 
       case SkillEffectType.Summon: {
-        if (effect.summonTemplate && this.onSummon) {
+        if (effect.summonTemplate) {
+          const spawnPos = actor.pos ? this.findNearestEmptyCell(actor.pos) : null;
+          if (!spawnPos) {
+            result.summoned = false;
+            result.failureReason = '附近无可用格子，无法召唤';
+            break;
+          }
           const summonId = `summon_${actor.id}_${Date.now()}_${this.rng.nextInt(0, 9999)}`;
           const template = effect.summonTemplate;
           const summon = this.unitManager.createUnit(
             summonId,
-            template.name ?? `召唤物`,
+            template.name ?? '召唤物',
             actor.team,
             template.stats ?? {
               maxHp: 50, hp: 50, atk: 10, def: 5, spd: 5,
@@ -168,13 +176,8 @@ export class EffectResolver {
             template.skills ?? [],
             { isSummon: true, summonerId: actor.id, tags: template.tags ?? [] }
           );
-          if (actor.pos) {
-            const adjacent = this.findAdjacentEmptyCell(actor.pos);
-            if (adjacent) {
-              summon.pos = adjacent;
-              this.grid.placeUnit(adjacent, summonId);
-            }
-          }
+          summon.pos = spawnPos;
+          this.grid.placeUnit(spawnPos, summonId);
           if (this.onSummon) this.onSummon(summon);
           result.summoned = true;
           result.summonId = summonId;
@@ -184,7 +187,16 @@ export class EffectResolver {
 
       case SkillEffectType.Revive: {
         if (target.status === UnitStatus.Dead) {
+          const spawnPos = actor.pos ? this.findNearestEmptyCell(actor.pos) : null;
+          if (!spawnPos) {
+            result.revived = false;
+            result.failureReason = '附近无可用格子，无法复活';
+            break;
+          }
           this.unitManager.revive(target.id, (effect.reviveHpPercent ?? 50) / 100);
+          this.unitManager.setUnitPosition(target.id, spawnPos);
+          this.grid.placeUnit(spawnPos, target.id);
+          if (this.onRevive) this.onRevive(this.unitManager.getUnit(target.id));
           result.revived = true;
         }
         break;
@@ -267,24 +279,35 @@ export class EffectResolver {
     this.unitManager.tickCooldowns(unitId);
   }
 
-  private findAdjacentEmptyCell(pos: Position): Position | null {
+  findNearestEmptyCell(center: Position): Position | null {
+    const visited = new Set<string>();
+    const key = (p: Position) => `${p.x},${p.y}`;
+    visited.add(key(center));
+    const queue: Position[] = [center];
     const dirs = [
       { x: 0, y: -1 },
       { x: 1, y: 0 },
       { x: 0, y: 1 },
       { x: -1, y: 0 },
     ];
-    for (const d of dirs) {
-      const nx = pos.x + d.x;
-      const ny = pos.y + d.y;
-      if (nx >= 0 && nx < this.grid.getWidth() && ny >= 0 && ny < this.grid.getHeight()) {
-        const cell = this.grid.getCell({ x: nx, y: ny });
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const d of dirs) {
+        const nx = current.x + d.x;
+        const ny = current.y + d.y;
+        const np: Position = { x: nx, y: ny };
+        if (nx < 0 || nx >= this.grid.getWidth() || ny < 0 || ny >= this.grid.getHeight()) continue;
+        const k = key(np);
+        if (visited.has(k)) continue;
+        visited.add(k);
+        const cell = this.grid.getCell(np);
         if (cell.unitId === null) {
-          const cfg = this.grid.getTerrainEffects({ x: nx, y: ny });
+          const cfg = this.grid.getTerrainEffects(np);
           if (cfg.passable) {
-            return { x: nx, y: ny };
+            return np;
           }
         }
+        queue.push(np);
       }
     }
     return null;
